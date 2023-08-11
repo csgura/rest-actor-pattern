@@ -1,0 +1,2 @@
+
+POST    /call/rpc                          restactor.endpoint.RestController.callRpc

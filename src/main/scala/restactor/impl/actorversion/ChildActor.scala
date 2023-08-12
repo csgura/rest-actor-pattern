@@ -3,10 +3,11 @@ package restactor.impl.actorversion
 import akka.actor.{Actor, Props, Stash, Timers}
 import play.api.Logging
 import restactor.service.{CallResult, DeviceInfo}
-import restactor.utils.{ActorState, ResponseMesaageType, StateMachineActor}
+import restactor.utils.{ActorState, StateMachineActor}
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration.DurationInt
+import restactor.utils.RequestMessage
 
 object ChildActor {
   def props(requires: Requires, targetId: String): Props = {
@@ -15,36 +16,33 @@ object ChildActor {
 
 }
 
+class ChildActor(requires: Requires, targetId: String)
+    extends StateMachineActor
+    with Stash
+    with Timers
+    with Logging {
 
-
-class ChildActor(requires: Requires, targetId: String) extends StateMachineActor with Stash with Timers with Logging {
-
-  implicit val dispatcher  : ExecutionContext = context.dispatcher
-
-
-   def loadDeviceInfo(): Unit = {
-     logger.info("load device info")
-    val f  = requires.deviceDao.loadInfo(targetId);
-    f.foreach( di => {
+  def loadDeviceInfo(): Unit = {
+    logger.info("load device info")
+    val f = requires.deviceDao.loadInfo(targetId);
+    f.foreach(di => {
       self ! di
-    } )
+    })
     f.failed.foreach(err => {
       self ! err
     })
   }
 
-  def callRpc(di : DeviceInfo,  callArgs : MessageCallArgs) : Future[CallResult] = {
+  def callRpc(di: DeviceInfo, callArgs: MessageCallArgs): Future[CallResult] = {
     Future.successful(CallResult(di.num, "ok"))
   }
   def okState(di: DeviceInfo): ActorState = {
     return new ActorState {
 
-
       override def onEnter(): Unit = {
         context.setReceiveTimeout(2.second)
         requires.deviceDao.storeInfo(di)
       }
-
 
       override def onExit(): Unit = {
         requires.deviceDao.storeInfo(di)
@@ -57,24 +55,24 @@ class ChildActor(requires: Requires, targetId: String) extends StateMachineActor
           val rfuture = callRpc(di, rpcCall)
           rfuture.foreach(res => rpcCall.sendResponse(returnPath, res))
           rfuture.failed.foreach(err => {
-            rpcCall.sendResponse(returnPath, err)
+            rpcCall.sendError(returnPath, err)
 
             if (err.isInstanceOf[RuntimeException]) {
               self ! err
             }
           })
 
-
-          logger.info(s"call incr num : ${di.num},  rpc : args : ${rpcCall.callArgs}")
+          logger.info(
+            s"call incr num : ${di.num},  rpc : args : ${rpcCall.callArgs}"
+          )
 
           rpcCall.sendResponse(sender(), CallResult(di.num, "ok"))
           become(okState(di.incrNum()))
         }
         case err: RuntimeException => {
-          context.become(failedState(err))
+          context.become(failedState(0, err))
         }
-        case akka.actor.ReceiveTimeout
-        => {
+        case akka.actor.ReceiveTimeout => {
           requires.deviceDao.storeInfo(di)
           context.stop(self)
         }
@@ -82,7 +80,7 @@ class ChildActor(requires: Requires, targetId: String) extends StateMachineActor
     }
   }
 
-  def retryState(): Receive = {
+  def retryState(retryCount: Int): Receive = {
     logger.info("become retry state")
 
     loadDeviceInfo()
@@ -93,19 +91,18 @@ class ChildActor(requires: Requires, targetId: String) extends StateMachineActor
       }
       case err: Throwable => {
         unstashAll()
-        context.become(failedState(err))
+        context.become(failedState(retryCount, err))
       }
-      case _: ResponseMesaageType[_] => {
+      case _: RequestMessage => {
         stash()
       }
     }
   }
 
-  def failedState(err: Throwable): Receive = {
+  def failedState(retryCount: Int, err: Throwable): Receive = {
 
     logger.info("become failed state")
-    timers.startSingleTimer("reconnect", "reconnect" , 2.second)
-
+    timers.startSingleTimer("reconnect", "reconnect", 2.second)
 
     return {
       case "reconnect" => {
@@ -113,11 +110,14 @@ class ChildActor(requires: Requires, targetId: String) extends StateMachineActor
         // timers.cancel("reconnect")
 
         // 여기는 timer event 받고 이동하는 거라 cancel 할 필요가 없음.
-        context.become(retryState())
+        context.become(retryState(retryCount + 1))
       }
-      case req : MessageCallArgs => {
-        if (req.requestTime < System.currentTimeMillis() - 3000 ) {
-          req.sendResponse(sender(), CallResult(500, s"err = ${err.getMessage}"))
+      case req: MessageCallArgs => {
+        if (req.requestTime < System.currentTimeMillis() - 3000) {
+          req.sendResponse(
+            sender(),
+            CallResult(500, s"err = ${err.getMessage}")
+          )
         } else {
           stash()
         }
@@ -125,5 +125,5 @@ class ChildActor(requires: Requires, targetId: String) extends StateMachineActor
     }
   }
 
-  override def receive: Receive = retryState()
+  override def receive: Receive = retryState(0)
 }

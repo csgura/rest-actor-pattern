@@ -7,54 +7,42 @@ import akka.util.Timeout
 import scala.concurrent.{ExecutionContext, Future}
 import scala.reflect.ClassTag
 import scala.util.{Failure, Success, Try}
+import views.html.defaultpages.error
 
-trait ActorState {
-  def onEnter() : Unit = {
-
-  }
-
-  def onExit() : Unit = {
-
-  }
-
-  def receive: Receive
-}
-
-abstract  class StateMachineActor extends  Actor {
-
-  var currentState : ActorState = _
-  def become( news:  => ActorState) : Unit = {
-    if(currentState != null) {
-      currentState.onExit()
-    }
-    val ns = news
-    context.become(ns.receive)
-    currentState = ns
-    ns.onEnter()
+trait RequestMessage {
+  def sendError(actorRef: ActorRef, err: Throwable) = {
+    actorRef ! Failure(err)
   }
 }
 
-trait ResponseMesaageType[T] {
-  def sendResponse( actorRef: ActorRef , response : T ) = {
+trait ResponseMesaageType[T] extends RequestMessage {
+  def sendResponse(actorRef: ActorRef, response: T) = {
     actorRef ! Success(response)
   }
 
-  def sendResponse( actorRef: ActorRef , response : Throwable) = {
-    actorRef ! Failure(response)
+  def sendResponse(actorRef: ActorRef, response: Try[T]) = {
+    actorRef ! response
   }
 
-  def sendResponse( actorRef: ActorRef , response : Try[T]) = {
-    actorRef ! response
+  def sendFuture(actorRef: ActorRef, f: Future[T])(implicit
+      ec: ExecutionContext
+  ) = {
+    f.onComplete(sendResponse(actorRef, _))
   }
 }
 
 object askUtil {
   import akka.pattern.ask
 
-  implicit class AskUtil ( actorRef : ActorRef ) {
-    def askWith[T](responseMessageType: ResponseMesaageType[T])(implicit timeout: Timeout, sender: ActorRef = Actor.noSender, classTag : ClassTag[T], executionContext: ExecutionContext) : Future[T] = {
-      actorRef.ask( responseMessageType ).mapTo[Try[T]].flatMap {
-        case Success(value) => Future.successful(value)
+  implicit class AskUtil(actorRef: ActorRef) {
+    def askWith[T](responseMessageType: ResponseMesaageType[T])(implicit
+        timeout: Timeout,
+        sender: ActorRef = Actor.noSender,
+        classTag: ClassTag[T],
+        executionContext: ExecutionContext
+    ): Future[T] = {
+      actorRef.ask(responseMessageType).mapTo[Try[T]].flatMap {
+        case Success(value)     => Future.successful(value)
         case Failure(exception) => Future.failed(exception)
       }
     }

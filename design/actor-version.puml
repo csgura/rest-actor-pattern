@@ -2,22 +2,29 @@
 [*] --> retryState
 retryState : enter/ loadDeviceInfo()
 
-retryState -down-> failedState : Throwable
-retryState -down-> okState : DeviceInfo
+retryState --> failedState : Throwable and retry count < 2
+retryState --> giveUpState : Throwable and retry count >= 2
+retryState --> okState : DeviceInfo
+retryState: RequestMessage/ stash
 
 okState : enter/ set receive timeout,
 okState: enter/ storeInfo(di)
 okState : exit/ storeInfo()
 okState : MessageCallArgs/ call rpc
-okState  -down-> failedState : RuntimeException
-okState -> [*] : ReceiveTimeout
+okState  --> failedState : RuntimeException
+okState --> [*] : ReceiveTimeout
 
 
 failedState: enter/ set retry timer
 failedState: exit/ cancel retry timer
-failedState -> retryState : reconnect
+failedState --> retryState : reconnect
 failedState: MessageCallArgs/ send error or stash
 
+
+giveUpState: enter/ send PoisonPill to self
+giveUpState: MessageCallArgs/ send error
+giveUpState: RequestMessage/ send error
+giveUpState --> [*] : PoisonPill
 
 
 @enduml

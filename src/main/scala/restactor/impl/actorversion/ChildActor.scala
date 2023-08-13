@@ -8,6 +8,7 @@ import restactor.utils.{ActorState, StateMachineActor}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration.DurationInt
 import restactor.utils.RequestMessage
+import akka.actor.PoisonPill
 
 object ChildActor {
   def props(requires: Requires, targetId: String): Props = {
@@ -81,7 +82,7 @@ class ChildActor(requires: Requires, targetId: String)
   }
 
   def retryState(retryCount: Int): Receive = {
-    logger.info("become retry state")
+    logger.info(s"become retry state, retryCount = ${retryCount}")
 
     loadDeviceInfo()
     return {
@@ -91,11 +92,28 @@ class ChildActor(requires: Requires, targetId: String)
       }
       case err: Throwable => {
         unstashAll()
-        context.become(failedState(retryCount, err))
+        if (retryCount >= 2) {
+          context.become(giveUpState(err))
+        } else {
+          context.become(failedState(retryCount, err))
+        }
       }
       case _: RequestMessage => {
         stash()
       }
+    }
+  }
+  def giveUpState(err: Throwable): Receive = {
+    logger.info("become giveup state")
+    self ! PoisonPill
+    return {
+      case req: MessageCallArgs => {
+        req.sendResponse(sender(), CallResult(500, "system error"))
+      }
+      case req: RequestMessage => {
+        req.sendError(sender(), err)
+      }
+      case _ => {}
     }
   }
 
@@ -113,7 +131,7 @@ class ChildActor(requires: Requires, targetId: String)
         context.become(retryState(retryCount + 1))
       }
       case req: MessageCallArgs => {
-        if (req.requestTime < System.currentTimeMillis() - 3000) {
+        if (req.requestTime < System.currentTimeMillis() - 7000) {
           req.sendResponse(
             sender(),
             CallResult(500, s"err = ${err.getMessage}")

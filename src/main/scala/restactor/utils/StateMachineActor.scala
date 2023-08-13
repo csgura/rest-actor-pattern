@@ -3,6 +3,7 @@ package restactor.utils
 import akka.actor.Actor
 import scala.concurrent.Future
 import scala.concurrent.ExecutionContext
+import play.api.Logging
 
 trait ActorState {
   def onEnter(): Unit = {}
@@ -12,7 +13,7 @@ trait ActorState {
   def receive: Actor.Receive
 }
 
-abstract class StateMachineActor extends Actor {
+abstract class StateMachineActor extends Actor with Logging {
 
   implicit val dispatcher: ExecutionContext = context.dispatcher
 
@@ -37,5 +38,13 @@ abstract class StateMachineActor extends Actor {
     f.foreach(v => self ! v)
     f.failed.foreach(err => self ! maperror(err))
     f
+  }
+
+  override def postStop(): Unit = {
+    if (currentState != null) {
+      currentState.onExit()
+      currentState = null
+    }
+    logger.info(s"actor ${self} stopped")
   }
 }

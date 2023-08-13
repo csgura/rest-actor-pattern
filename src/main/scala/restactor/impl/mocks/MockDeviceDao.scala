@@ -16,11 +16,11 @@ class MockDeviceDao extends DeviceDao with Logging {
   override def loadInfo(id: String): Future[DeviceInfo] = {
     logger.info(s"load Info $id")
 
-    if (id.equals("none")) {
+    if (id == "none") {
       Future.failed(new RuntimeException("no connection"))
+    } else {
+      Future.successful(DeviceInfo("10", 0))
     }
-
-    Future.successful(DeviceInfo("10", 0))
 
   }
 }

@@ -10,6 +10,8 @@ trait ActorState {
 
   def onExit(): Unit = {}
 
+  def postStop() : Unit = {}
+
   def receive: Actor.Receive
 }
 
@@ -23,7 +25,7 @@ abstract class StateMachineActor extends Actor with Logging {
       currentState.onExit()
     }
     val ns = news
-    context.become(ns.receive)
+    context.become(ns.receive.orElse(statelessReceive))
     currentState = ns
     ns.onEnter()
   }
@@ -43,8 +45,17 @@ abstract class StateMachineActor extends Actor with Logging {
   override def postStop(): Unit = {
     if (currentState != null) {
       currentState.onExit()
+      currentState.postStop()
       currentState = null
     }
     logger.info(s"actor ${self} stopped")
   }
+
+  def statelessReceive : Receive = {
+    case any => {
+      logger.info(s"actor $self receives unknown message $any")
+    }
+  }
+
+  override def receive: Receive = statelessReceive
 }
